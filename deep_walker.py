@@ -9,7 +9,8 @@ from tqdm import tqdm
 import numpy as np
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-torch.set_default_device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_device(device)
 
 class PolicyModel(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim=32, depth=3):
@@ -78,11 +79,10 @@ class REINFORCENeuralAgent:
             mu, std = self.model(state)
             d = MultivariateNormal(mu, torch.diag(std))
             action = d.sample()
-            action = torch.clamp(action, -1, 1)
         return action
 
     def experience_replay(self):    
-        dl = torch.utils.data.DataLoader(self.replay_buffer, batch_size=self.batch_size, shuffle=True)
+        dl = torch.utils.data.DataLoader(self.replay_buffer, batch_size=self.batch_size, shuffle=True, generator=torch.Generator(device=device))
         loading_bar = tqdm(dl, desc="Experience Replay", total=len(dl))
         self.model.train()
         for batch in loading_bar:    
