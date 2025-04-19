@@ -78,7 +78,7 @@ class DQLNeuralAgent:
     def q_value_arrival_state(self, states):
         with torch.no_grad():
             q_values = self.target_model(states)
-            q_values = torch.max(q_values, dim=1)[0]
+            q_values = q_values.max(dim=1)[0]
         return q_values
 
     def experience_replay(self):
@@ -146,25 +146,16 @@ def main():
     
     model = FFModel(input_dim=8, output_dim=4)
     agent = DQLNeuralAgent(model=model)
-    for i in range(10):
+    i = 0
+    while True:
+        i += 1
         env = gym.make("LunarLander-v3")
         agent.fit(env, num_episodes=9)
         env.close()
         env = gym.make("LunarLander-v3", render_mode="human")
         agent.fit(env, num_episodes=1)
         env.close()
-    # Make a demo
-    env = gym.make("LunarLander-v3", render_mode="human")
-    state, _ = env.reset()
-    done = False
-    while not done:
-        action = agent.select_action(state)
-        next_state, reward, terminated, truncated, _ = env.step(action)
-        done = terminated or truncated
-        state = next_state
-        env.render()
-        print(f"Action: {action}, Reward: {reward}")
-    env.close()
+        print(f"Episode {i*10} finished")
 
 if __name__ == "__main__":
     main()
