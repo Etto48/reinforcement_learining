@@ -1,3 +1,4 @@
+import sys
 import time
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,17 +7,22 @@ import socket
 def main():
     # create a TCP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_address = ("localhost", 8048)
-    for i in range(100):
+    server_address = ("192.168.178.64", 8048)
+    print(f"Connecting to {server_address[0]}:{server_address[1]}")
+    while True:
         try:
             sock.connect(server_address)
             break
         except ConnectionRefusedError:
-            print(f"Connection attempt {i + 1} failed. Retrying...")
             time.sleep(1)
             pass
     print("Server started, waiting for data...")
     plt.figure()
+    # handle the closing of the window
+    def handle_close(evt):
+        sock.close()
+        sys.exit()
+    plt.gcf().canvas.mpl_connect('close_event', handle_close)
     plt.ion()
     plt.show()
     while True:
@@ -43,8 +49,14 @@ def main():
         rgb_array = np.frombuffer(data, dtype=np.uint8)
         rgb_array = rgb_array.reshape((size_x, size_y, size_z))
         # display the image
-        plt.imshow(rgb_array)
+        try:
+            del img
+        except:
+            pass
+        plt.clf()
+        img = plt.imshow(rgb_array)
         plt.axis('off')
+        plt.tight_layout()
         plt.pause(0.001)
 
 if __name__ == "__main__":

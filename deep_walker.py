@@ -7,39 +7,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
 from rgb_array_server import RgbArrayServer
+from models import PolicyModel, CriticModel
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(device)
 
 server = RgbArrayServer()
 
-class PolicyModel(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim=64, depth=3):
-        super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.hidden_dim = hidden_dim
-        self.depth = depth
-        self.layers = nn.Sequential()
-        for i in range(depth):
-            in_features = input_dim if i == 0 else hidden_dim
-            out_features = hidden_dim if i < depth - 1 else output_dim * 2
-            self.layers.append(nn.Linear(in_features, out_features))
-            if i < depth - 1:
-                self.layers.append(nn.ReLU())
-    
-    def forward(self, x: torch.Tensor):
-        if x.ndim == 1:
-            x = x.view(1, -1)
-        x = self.layers(x) * 0.5
-        mu, logvar = x.chunk(2, dim=-1)
-        std = F.sigmoid(logvar) + 0.01
-        mu = F.tanh(mu)
-        return mu, std
-
 class ExperienceBuffer(torch.utils.data.Dataset):
-    def __init__(self, discount=0.99):
+    def __init__(self, discount):
         self.buffer = []
+        self.last_experience_index = 0
         self.discount = discount
 
     def add(self, state, action, reward):
@@ -50,16 +28,22 @@ class ExperienceBuffer(torch.utils.data.Dataset):
 
     def clear(self):
         self.buffer.clear()
-    
+        self.last_experience_index = 0
+
+    def next_experience(self):
+        current_reward = 0
+        for i in reversed(range(self.last_experience_index, len(self.buffer))):
+            state, action, reward = self.buffer[i]
+            current_reward = reward + self.discount * current_reward
+            reward = current_reward
+            self.buffer[i] = (state, action, reward)
+        self.last_experience_index = len(self.buffer)
+
     def single_batch(self):
         states, actions, rewards = zip(*self.buffer)
         states = torch.stack(states)
         actions = torch.stack(actions)
         rewards = torch.stack(rewards)
-        current_reward = 0
-        for i in reversed(range(len(rewards))):
-            current_reward = rewards[i] + self.discount * current_reward
-            rewards[i] = current_reward
         return states, actions, rewards
 
     def __len__(self):
@@ -69,11 +53,13 @@ class ExperienceBuffer(torch.utils.data.Dataset):
         return self.buffer[index]
 
 class REINFORCENeuralAgent:
-    def __init__(self, model: nn.Module):
+    def __init__(self, model: nn.Module, baseline: nn.Module = None):
         self.model = model
+        self.baseline = baseline
         self.gamma = 0.99
         self.replay_buffer = ExperienceBuffer(discount=self.gamma)
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.001)
+        self.baseline_optimizer = torch.optim.AdamW(self.baseline.parameters(), lr=0.001) if baseline else None
 
     def select_action(self, state):
         state = torch.tensor(state, dtype=torch.float32)
@@ -82,24 +68,38 @@ class REINFORCENeuralAgent:
             mu, std = self.model(state)
             mu = mu.view(-1)
             std = std.view(-1)
-            d = MultivariateNormal(mu, torch.diag(std))
+            covariance_matrix = torch.diag_embed(std ** 2)
+            d = MultivariateNormal(mu, covariance_matrix)
             action = d.sample()
         return action
 
     def experience_replay(self):    
         self.model.train()
+        if len(self.replay_buffer) < 1:
+            return 0
         batch = self.replay_buffer.single_batch()
         states, actions, rewards = batch
-        rewards_std, rewards_mean = torch.std_mean(rewards)
-        rewards = (rewards - rewards_mean) / (rewards_std + 1e-8)
+        if self.baseline is not None:
+            self.baseline.train()
+            self.baseline_optimizer.zero_grad()
+            baseline_loss = F.mse_loss(self.baseline(states).view(-1), rewards)
+            baseline_loss.backward()
+            nn.utils.clip_grad_norm_(self.baseline.parameters(), 1)
+            self.baseline_optimizer.step()
         mu, std = self.model(states)
-        d = MultivariateNormal(mu, torch.einsum('ij, jh -> ijh', std, torch.eye(self.model.output_dim)))
+        covariance_matrix = torch.diag_embed(std ** 2)
+        d = MultivariateNormal(mu, covariance_matrix)
         log_probs = d.log_prob(actions)
         entropy = d.entropy()
-        loss: torch.Tensor = -log_probs * rewards
+        if self.baseline is not None:
+            self.baseline.eval()
+        with torch.no_grad():
+            advantage = (rewards - (self.baseline(states).view(-1) if self.baseline else 0)).detach()
+        loss: torch.Tensor = -log_probs * advantage
         self.optimizer.zero_grad()
         loss = loss.mean()
         loss.backward()
+        nn.utils.clip_grad_norm_(self.model.parameters(), 1)
         self.optimizer.step()
         self.model.eval()
         return loss.item()
@@ -115,6 +115,7 @@ class REINFORCENeuralAgent:
         avg_reward = 0
         best_reward = -np.inf
         steps = 0
+        loss = "N/A"
         for episode in loading_bar:
             state, _ = env.reset()
             episode_reward = 0
@@ -123,27 +124,28 @@ class REINFORCENeuralAgent:
                 action = self.select_action(state)
                 action = action.cpu().numpy()
                 next_state, reward, terminated, truncated, _ = env.step(action)
-                if episode % 10 == 0:
+                if episode % num_episodes == 0:
                     screenshot = env.render()
                     server.send(screenshot)
                 done = terminated or truncated
                 self.replay_buffer.add(state, action, reward)
                 episode_reward += reward
                 steps += 1
-            episode_reward /= steps
             best_reward = max(best_reward, episode_reward)
             avg_reward = 0.9 * avg_reward + 0.1 * episode_reward
-            loss = self.experience_replay()
-            loading_bar.set_postfix({"Episode": episode, "Reward": episode_reward, "Avg Reward": avg_reward, "Best Reward": best_reward, "Loss": loss})
-            self.replay_buffer.clear()
+            self.replay_buffer.next_experience()
+            if (episode + 1) % num_episodes == 0:
+                loss = self.experience_replay()
+                self.replay_buffer.clear()
+                
+            loading_bar.set_postfix({"Reward": episode_reward, "Avg Reward": avg_reward, "Best Reward": best_reward, "Loss": loss})
+            
             
 
 def main():
     
-    env = gym.make("BipedalWalker-v3", render_mode="rgb_array")
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-    model = PolicyModel(input_dim=state_dim, output_dim=action_dim)
+    env = gym.make("Pendulum-v1", render_mode="rgb_array")
+    model = PolicyModel(state_space=env.observation_space, action_space=env.action_space, deterministic=False)
     agent = REINFORCENeuralAgent(model=model)
     
     agent.fit(env)
