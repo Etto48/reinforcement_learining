@@ -137,6 +137,7 @@ class ACNeuralAgent:
                 policy_loss, critic_loss = self.experience_replay()
                 episode_reward += reward
                 steps += 1
+                state = next_state
             best_reward = max(best_reward, episode_reward)
             loading_bar.set_postfix({"Avg Reward": episode_reward, "Best Reward": best_reward, "Policy Loss": policy_loss, "Critic Loss": critic_loss})
 

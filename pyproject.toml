@@ -5,9 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "gymnasium[box2d]>=1.1.1",
+    "gymnasium[box2d,mujoco]>=1.1.1",
     "matplotlib>=3.10.1",
     "numpy>=2.2.4",
+    "opencv-python[qt]>=4.11.0.86",
     "pygame>=2.6.1",
     "qqdm>=0.0.7",
     "swig>=4.3.0",

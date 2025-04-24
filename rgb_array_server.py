@@ -1,6 +1,7 @@
 import socket
 
 import numpy as np
+import cv2
 
 
 class RgbArrayServer:
@@ -11,6 +12,12 @@ class RgbArrayServer:
         self.socket.setblocking(False)
         self.socket.listen(1)
         self.client_socket = None
+
+    def serialize(self, data: np.ndarray):
+        _, frame = cv2.imencode(".jpg", data)
+        frame = frame.tobytes()
+        data = len(frame).to_bytes(4, byteorder="big") + frame
+        return data
 
     def is_connected(self):
         if self.client_socket is None:
@@ -26,11 +33,9 @@ class RgbArrayServer:
     def send(self, data: np.ndarray):
         if not self.is_connected():
             return
-        shape = data.shape
-        shape_bytes = np.array(shape, dtype=np.int32)
         try:
-            self.client_socket.sendall(shape_bytes.tobytes())
-            self.client_socket.sendall(data.tobytes())
+            data = self.serialize(data)
+            self.client_socket.sendall(data)
         except (BrokenPipeError, ConnectionResetError):
             self.client_socket.close()
             self.client_socket = None

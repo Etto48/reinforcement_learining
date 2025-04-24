@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
 from rgb_array_server import RgbArrayServer
 from models import PolicyModel, CriticModel
+import argparse as ap
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(device)
@@ -16,13 +17,14 @@ torch.set_default_device(device)
 server = RgbArrayServer()
 
 class ExperienceBuffer(torch.utils.data.Dataset):
-    def __init__(self, max_len=10000):
+    def __init__(self, max_len=100000):
         self.buffer = []
         self.max_len = max_len
 
     def add(self, state, action, reward, next_state, done):
         if len(self.buffer) >= self.max_len:
-            self.buffer.pop(0)
+            random_index = np.random.randint(0, len(self.buffer))
+            self.buffer.pop(random_index)
         state = torch.tensor(state, dtype=torch.float32)
         action = torch.tensor(action, dtype=torch.float32)
         reward = torch.tensor(reward, dtype=torch.float32)
@@ -43,14 +45,15 @@ class ACNeuralAgent:
     def __init__(self, actor: nn.Module, critic: nn.Module):
         self.actor = actor
         self.target_actor = copy.deepcopy(actor)
+        self.actor.eval()
         self.target_actor.eval()
         self.critic = critic
         self.target_critic = copy.deepcopy(critic)
+        self.critic.eval()
         self.target_critic.eval()
         self.gamma = 0.99
-        self.std = 1
         self.replay_buffer = ExperienceBuffer()
-        self.critic_criterion = nn.SmoothL1Loss()
+        self.critic_criterion = nn.MSELoss()
         self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1e-3)
         self.critic_optimizer = torch.optim.AdamW(self.critic.parameters(), lr=1e-3)
 
@@ -71,7 +74,7 @@ class ACNeuralAgent:
 
     def experience_replay(self): 
         batch_size = 256
-        num_batches = 3
+        num_batches = 1
         self.actor.train()
         self.critic.train()
         if len(self.replay_buffer) < num_batches * batch_size:
@@ -101,7 +104,7 @@ class ACNeuralAgent:
             
             self.critic_optimizer.zero_grad()
             critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.1)
             self.critic_optimizer.step()
             critic_avg_loss += critic_loss.item()
 
@@ -111,7 +114,7 @@ class ACNeuralAgent:
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.1)
             self.actor_optimizer.step()
             actor_avg_loss += actor_loss.item()
 
@@ -148,12 +151,19 @@ class ACNeuralAgent:
                 policy_loss, critic_loss = self.experience_replay()
                 episode_reward += reward
                 steps += 1
+                state = next_state
             best_reward = max(best_reward, episode_reward)
             loading_bar.set_postfix({"Avg Reward": episode_reward, "Best Reward": best_reward, "Actor Loss": policy_loss, "Critic Loss": critic_loss})
 
-def main():
+def main(env_name: str):
     
-    env = gym.make("Pendulum-v1", render_mode="rgb_array")
+    if env_name.startswith("LunarLander"):
+        args = {
+            "continuous": True,
+        }
+    else:
+        args = {}
+    env = gym.make(env_name, render_mode="rgb_array", **args)
     state_space = env.observation_space
     action_space = env.action_space
     model = PolicyModel(state_space=state_space, action_space=action_space, deterministic=True)
@@ -164,4 +174,7 @@ def main():
     env.close()
 
 if __name__ == "__main__":
-    main()
+    parser = ap.ArgumentParser(description="Deep Deterministic Policy Gradient")
+    parser.add_argument("--env", type=str, default="BipedalWalker-v3", required=False, help="Environment to train on")
+    args = parser.parse_args()
+    main(env_name=args.env)

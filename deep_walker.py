@@ -40,6 +40,7 @@ class ExperienceBuffer(torch.utils.data.Dataset):
         self.last_experience_index = len(self.buffer)
 
     def single_batch(self):
+        assert len(self.buffer) == self.last_experience_index, "Buffer not finalized, call next_experience() first"
         states, actions, rewards = zip(*self.buffer)
         states = torch.stack(states)
         actions = torch.stack(actions)
@@ -68,7 +69,7 @@ class REINFORCENeuralAgent:
             mu, std = self.model(state)
             mu = mu.view(-1)
             std = std.view(-1)
-            covariance_matrix = torch.diag_embed(std ** 2)
+            covariance_matrix = torch.diag_embed(std)
             d = MultivariateNormal(mu, covariance_matrix)
             action = d.sample()
         return action
@@ -87,7 +88,7 @@ class REINFORCENeuralAgent:
             nn.utils.clip_grad_norm_(self.baseline.parameters(), 1)
             self.baseline_optimizer.step()
         mu, std = self.model(states)
-        covariance_matrix = torch.diag_embed(std ** 2)
+        covariance_matrix = torch.diag_embed(std)
         d = MultivariateNormal(mu, covariance_matrix)
         log_probs = d.log_prob(actions)
         entropy = d.entropy()
@@ -131,6 +132,7 @@ class REINFORCENeuralAgent:
                 self.replay_buffer.add(state, action, reward)
                 episode_reward += reward
                 steps += 1
+                state = next_state
             best_reward = max(best_reward, episode_reward)
             avg_reward = 0.9 * avg_reward + 0.1 * episode_reward
             self.replay_buffer.next_experience()
@@ -144,7 +146,7 @@ class REINFORCENeuralAgent:
 
 def main():
     
-    env = gym.make("Pendulum-v1", render_mode="rgb_array")
+    env = gym.make("LunarLander-v3", continuous=True, render_mode="rgb_array")
     model = PolicyModel(state_space=env.observation_space, action_space=env.action_space, deterministic=False)
     agent = REINFORCENeuralAgent(model=model)
     
