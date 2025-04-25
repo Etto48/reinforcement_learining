@@ -95,7 +95,7 @@ class REINFORCENeuralAgent:
         if self.baseline is not None:
             self.baseline.eval()
         with torch.no_grad():
-            advantage = (rewards - (self.baseline(states).view(-1) if self.baseline else 0)).detach()
+            advantage = (rewards - (self.baseline(states).view(-1) if self.baseline else rewards.mean())).detach() / (rewards.std() + 1e-8)
         loss: torch.Tensor = -log_probs * advantage
         self.optimizer.zero_grad()
         loss = loss.mean()
