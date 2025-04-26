@@ -21,10 +21,18 @@ class MonitorServer:
             self.client_socket.close()
         self.socket.close()
 
-    def serialize(self, data: np.ndarray):
+    def _serialize_image(self, data: np.ndarray):
         _, frame = cv2.imencode(".jpg", data)
         frame = frame.tobytes()
         data = len(frame).to_bytes(4, byteorder="big") + frame
+        return data
+    
+    def _serialize_dictionary(self, data: dict[str, int | float | str]):
+        for key, value in data.items():
+            if isinstance(value, np.float32):
+                data[key] = float(value)
+        data = json.dumps(data).encode("utf-8")
+        data = (1).to_bytes(4, byteorder="big") + len(data).to_bytes(4, byteorder="big") + data
         return data
 
     def is_connected(self):
@@ -41,7 +49,7 @@ class MonitorServer:
     def send(self, data: np.ndarray):
         if not self.is_connected():
             return
-        data = self.serialize(data)
+        data = self._serialize_image(data)
         try:
             self.client_socket.sendall(data)
         except (BrokenPipeError, ConnectionResetError):
@@ -60,8 +68,7 @@ class MonitorServer:
     def send_info(self, info: dict[str, int | float | str]):
         if not self.is_connected():
             return
-        info = json.dumps(info).encode("utf-8")
-        info = (1).to_bytes(4, byteorder="big") + len(info).to_bytes(4, byteorder="big") + info
+        info = self._serialize_dictionary(info)
         try:
             self.client_socket.sendall(info)
         except (BrokenPipeError, ConnectionResetError):
