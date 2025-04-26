@@ -8,6 +8,7 @@ os.environ["QT_QPA_PLATFORM"] = "xcb"
 import cv2
 
 WINDOW = "RGB Array"
+LAST_IMAGE = np.zeros((400, 600, 3), dtype=np.uint8)
 
 def wait():
     cv2.waitKey(1)
@@ -15,7 +16,46 @@ def wait():
         cv2.destroyAllWindows()
         sys.exit(0)
 
+def monochrome_image(color: str):
+    match color:
+        case "red":
+            c = (0, 0, 255)
+        case "green":
+            c = (0, 255, 0)
+        case "blue":
+            c = (255, 0, 0)
+        case "yellow":
+            c = (0, 255, 255)
+        case "cyan":
+            c = (255, 255, 0)
+        case "magenta":
+            c = (255, 0, 255)
+        case "white":
+            c = (255, 255, 255)
+        case "black":
+            c = (0, 0, 0)
+        case "gray":
+            c = (128, 128, 128)
+        case "dark_gray":
+            c = (64, 64, 64)
+        case _:
+            raise ValueError(f"Invalid color: {color}")
+    img = np.zeros(LAST_IMAGE.shape, dtype=np.uint8)
+    img[:] = c
+    return img
+
+def paused():
+    img = LAST_IMAGE // 2 + monochrome_image("white") // 2
+    cv2.putText(img, "Waiting...", (50, LAST_IMAGE.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+    cv2.imshow(WINDOW, img)
+
+def disconnected_image():
+    img = monochrome_image("blue")
+    cv2.putText(img, "Connecting...", (50, LAST_IMAGE.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    cv2.imshow(WINDOW, img)
+
 def connect(host, port) -> socket.socket:
+    disconnected_image()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setblocking(False)
     addr_info = socket.getaddrinfo(host, None)
@@ -29,6 +69,7 @@ def connect(host, port) -> socket.socket:
             break
         except (BlockingIOError, ConnectionRefusedError):
             time.sleep(0.1)
+            wait()
             pass
         except OSError:
             ip_index += 1
@@ -39,9 +80,10 @@ def connect(host, port) -> socket.socket:
     return sock
 
 def main(host, port):
+    global LAST_IMAGE
     # create a TCP socket
-    sock = connect(host, port)
     cv2.namedWindow(WINDOW, cv2.WINDOW_GUI_NORMAL | cv2.WINDOW_AUTOSIZE)
+    sock = connect(host, port)
     # handle the closing of the window
     while True:
         # receive data from the client
@@ -61,9 +103,20 @@ def main(host, port):
             sock = connect(host, port)
             continue
         data_info = int.from_bytes(data_info, byteorder="big")
+        # avoid ddos
         if data_info > 1920 * 1080 * 3:
             print(f"Invalid info received. {data_info}")
             break
+        # check if the server requested to clear the image
+        match data_info:
+            case 0:
+                paused()
+                continue
+            case i if i < 128:
+                # reserved for future use
+                pass
+            case _:
+                pass
         # receive the image data
         data = b""
         while len(data) < data_info:
@@ -83,6 +136,7 @@ def main(host, port):
         image = np.frombuffer(data, dtype=np.uint8)
         rgb_array = cv2.imdecode(image, cv2.IMREAD_COLOR)
         rgb_array = cv2.cvtColor(rgb_array, cv2.COLOR_BGR2RGB)
+        LAST_IMAGE = rgb_array
         # display the image
         cv2.imshow(WINDOW, rgb_array)
         wait()

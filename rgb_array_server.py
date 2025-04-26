@@ -33,13 +33,23 @@ class RgbArrayServer:
     def send(self, data: np.ndarray):
         if not self.is_connected():
             return
+        data = self.serialize(data)
         try:
-            data = self.serialize(data)
             self.client_socket.sendall(data)
         except (BrokenPipeError, ConnectionResetError):
             self.client_socket.close()
             self.client_socket = None
+
     def __del__(self):
         if self.client_socket:
             self.client_socket.close()
         self.socket.close()
+
+    def send_clear(self):
+        if not self.is_connected():
+            return
+        try:
+            self.client_socket.sendall((0).to_bytes(4, byteorder="big"))
+        except (BrokenPipeError, ConnectionResetError):
+            self.client_socket.close()
+            self.client_socket = None

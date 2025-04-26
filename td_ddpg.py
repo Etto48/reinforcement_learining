@@ -7,6 +7,7 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
+from get_env_args import get_env_args
 from rgb_array_server import RgbArrayServer
 from models import PolicyModel, CriticModel
 import argparse as ap
@@ -16,7 +17,7 @@ torch.set_default_device(device)
 
 server = RgbArrayServer()
 
-class ExperienceBuffer(torch.utils.data.Dataset):
+class ReplayBuffer(torch.utils.data.Dataset):
     def __init__(self, max_len=100000):
         self.buffer = []
         self.max_len = max_len
@@ -52,7 +53,7 @@ class ACNeuralAgent:
         self.critic.eval()
         self.target_critic.eval()
         self.gamma = 0.99
-        self.replay_buffer = ExperienceBuffer()
+        self.replay_buffer = ReplayBuffer()
         self.critic_criterion = nn.MSELoss()
         self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1e-3)
         self.critic_optimizer = torch.optim.AdamW(self.critic.parameters(), lr=1e-3)
@@ -101,12 +102,6 @@ class ACNeuralAgent:
             
             predicted_q_values = self.critic(states, actions).view(-1)
             critic_loss: torch.Tensor = self.critic_criterion(predicted_q_values, y)
-            
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.1)
-            self.critic_optimizer.step()
-            critic_avg_loss += critic_loss.item()
 
             predicted_actions: torch.Tensor = self.actor(states)
             q_values: torch.Tensor = self.critic(states, predicted_actions)
@@ -117,6 +112,12 @@ class ACNeuralAgent:
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.1)
             self.actor_optimizer.step()
             actor_avg_loss += actor_loss.item()
+
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.1)
+            self.critic_optimizer.step()
+            critic_avg_loss += critic_loss.item()
 
         self.update_target_model()    
         
@@ -132,7 +133,7 @@ class ACNeuralAgent:
             yield i
             i += 1
 
-    def fit(self, env: gym.Env, num_episodes: int = 32):
+    def fit(self, env: gym.Env, num_episodes: int = 10):
         loading_bar = tqdm(self.iter_to_infinity(), desc="Training")
         best_reward = -np.inf
         for episode in loading_bar:
@@ -143,7 +144,7 @@ class ACNeuralAgent:
             while not done:
                 action = self.select_action(state)
                 next_state, reward, terminated, truncated, _ = env.step(action)
-                if episode % 10 == 0 and server.is_connected():
+                if episode % num_episodes == 0 and server.is_connected():
                     screenshot = env.render()
                     server.send(screenshot)
                 done = terminated or truncated
@@ -152,18 +153,14 @@ class ACNeuralAgent:
                 episode_reward += reward
                 steps += 1
                 state = next_state
+            if episode % num_episodes == 0 and server.is_connected():
+                server.send_clear()
             best_reward = max(best_reward, episode_reward)
             loading_bar.set_postfix({"Avg Reward": episode_reward, "Best Reward": best_reward, "Actor Loss": policy_loss, "Critic Loss": critic_loss})
 
-def main(env_name: str):
-    
-    if env_name.startswith("LunarLander"):
-        args = {
-            "continuous": True,
-        }
-    else:
-        args = {}
-    env = gym.make(env_name, render_mode="rgb_array", **args)
+def main(env_name: str): 
+    args = get_env_args(env_name)
+    env = gym.make(env_name, **args)
     state_space = env.observation_space
     action_space = env.action_space
     model = PolicyModel(state_space=state_space, action_space=action_space, deterministic=True)

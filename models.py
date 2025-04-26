@@ -86,17 +86,20 @@ class CriticModel(nn.Module):
             if i < depth - 1:
                 self.layers.append(nn.ReLU())
 
-    def forward(self, state: torch.Tensor, action: torch.Tensor):
+    def forward(self, state: torch.Tensor, action: Optional[torch.Tensor] = None):
         if state.ndim == 1 and self.input_ndim == 1:
             state = state.view(1, -1)
         elif state.ndim == self.input_ndim:
             state = state.unsqueeze(0)
-        if action.ndim == 1:
-            action = action.view(1, -1)
         if self.input_ndim == 3:
             state = state.permute(0, 3, 1, 2)
             state = self.conv(state)
-        x = torch.cat((state, action), dim=-1)
+        if action is not None:
+            if action.ndim == 1:
+                action = action.view(1, -1)
+            x = torch.cat((state, action), dim=-1)
+        else:
+            x = state
         x = self.layers(x)
         return x
         
