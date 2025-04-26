@@ -7,14 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
 from get_env_args import get_env_args
-from rgb_array_server import RgbArrayServer
+from monitor_server import MonitorServer
 from models import PolicyModel, CriticModel
 import argparse as ap
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(device)
 
-server = RgbArrayServer()
+server = MonitorServer()
 
 class ReplayBuffer(torch.utils.data.Dataset):
     def __init__(self, discount):
@@ -135,15 +135,18 @@ class REINFORCENeuralAgent:
                 steps += 1
                 state = next_state
             if episode % num_episodes == 0 and server.is_connected():
-                server.send_clear()
+                server.send_paused()
             best_reward = max(best_reward, episode_reward)
-            avg_reward = 0.9 * avg_reward + 0.1 * episode_reward
+            avg_reward = 0.99 * avg_reward + 0.01 * episode_reward
             self.replay_buffer.next_episode()
             if (episode + 1) % num_episodes == 0:
                 loss = self.experience_replay()
                 self.replay_buffer.clear()
-                
-            loading_bar.set_postfix({"Reward": episode_reward, "Avg Reward": avg_reward, "Best Reward": best_reward, "Loss": loss})
+            
+            info = {"Reward": episode_reward, "Avg Reward": avg_reward, "Best Reward": best_reward, "Loss": loss}
+            loading_bar.set_postfix(info)
+            info["Episode"] = episode
+            server.send_info(info)
             
             
 

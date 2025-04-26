@@ -1,10 +1,12 @@
 import socket
+import time
 
 import numpy as np
+import json
 import cv2
 
 
-class RgbArrayServer:
+class MonitorServer:
     def __init__(self):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -12,6 +14,12 @@ class RgbArrayServer:
         self.socket.setblocking(False)
         self.socket.listen(1)
         self.client_socket = None
+        self.is_connected()
+
+    def __del__(self):
+        if self.client_socket:
+            self.client_socket.close()
+        self.socket.close()
 
     def serialize(self, data: np.ndarray):
         _, frame = cv2.imencode(".jpg", data)
@@ -40,12 +48,7 @@ class RgbArrayServer:
             self.client_socket.close()
             self.client_socket = None
 
-    def __del__(self):
-        if self.client_socket:
-            self.client_socket.close()
-        self.socket.close()
-
-    def send_clear(self):
+    def send_paused(self):
         if not self.is_connected():
             return
         try:
@@ -53,3 +56,34 @@ class RgbArrayServer:
         except (BrokenPipeError, ConnectionResetError):
             self.client_socket.close()
             self.client_socket = None
+
+    def send_info(self, info: dict[str, int | float | str]):
+        if not self.is_connected():
+            return
+        info = json.dumps(info).encode("utf-8")
+        info = (1).to_bytes(4, byteorder="big") + len(info).to_bytes(4, byteorder="big") + info
+        try:
+            self.client_socket.sendall(info)
+        except (BrokenPipeError, ConnectionResetError):
+            self.client_socket.close()
+            self.client_socket = None
+
+def demo():
+    server = MonitorServer()
+    i = 0
+    paused = False
+    while True:
+        if (i // 10) % 2 == 0:
+            img = np.random.randint(0, 255, (600, 600, 3), dtype=np.uint8)
+            server.send(img)
+            paused = False
+        elif not paused:
+            server.send_paused()
+            paused = True
+
+        server.send_info({"step": i, "dummy": "info", "reward": np.random.rand()})
+        time.sleep(0.1)
+        i += 1
+
+if __name__ == "__main__":
+    demo()

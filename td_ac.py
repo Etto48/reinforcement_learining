@@ -8,14 +8,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
 from get_env_args import get_env_args
-from rgb_array_server import RgbArrayServer
+from monitor_server import MonitorServer
 from models import PolicyModel, CriticModel
 import argparse as ap
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(device)
 
-server = RgbArrayServer()
+server = MonitorServer()
 
 class ReplayBuffer(torch.utils.data.Dataset):
     def __init__(self, max_len=10000):
@@ -50,7 +50,7 @@ class ACNeuralAgent:
         self.critic.eval()
         self.target_critic.eval()
         self.gamma = 0.99
-        self.entropy_coefficient = 1
+        self.entropy_coefficient = 0.01
         self.replay_buffer = ReplayBuffer()
         self.critic_criterion = nn.MSELoss()
         self.optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1e-3)
@@ -110,18 +110,17 @@ class ACNeuralAgent:
             self.critic_optimizer.zero_grad()
             critic_loss = critic_loss.mean()
             critic_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 0.1)
             critic_avg_loss += critic_loss.item()
             self.critic_optimizer.step()
 
             self.optimizer.zero_grad()
             actor_loss = actor_loss.mean()
             actor_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.1)
             policy_avg_loss += actor_loss.item()
             self.optimizer.step()
             processed_batches += 1
-            self.entropy_coefficient = max(0.01, self.entropy_coefficient * 0.9)
             if single_batch:
                 break
             
@@ -160,9 +159,12 @@ class ACNeuralAgent:
                 steps += 1
                 state = next_state
             if episode % num_episodes == 0 and server.is_connected():
-                server.send_clear()
+                server.send_paused()
             best_reward = max(best_reward, episode_reward)
-            loading_bar.set_postfix({"Avg Reward": episode_reward, "Best Reward": best_reward, "Policy Loss": policy_loss, "Critic Loss": critic_loss})
+            info = {"Reward": episode_reward, "Best Reward": best_reward, "Policy Loss": policy_loss, "Critic Loss": critic_loss}
+            loading_bar.set_postfix(info)
+            info["Episode"] = episode
+            server.send_info(info)
 
 def main(env_name):
 

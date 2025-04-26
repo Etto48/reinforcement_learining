@@ -8,14 +8,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.distributions.multivariate_normal import MultivariateNormal
 from get_env_args import get_env_args
-from rgb_array_server import RgbArrayServer
+from monitor_server import MonitorServer
 from models import PolicyModel, CriticModel
 import argparse as ap
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_device(device)
 
-server = RgbArrayServer()
+server = MonitorServer()
 
 class ReplayBuffer(torch.utils.data.Dataset):
     def __init__(self, max_len=100000):
@@ -53,9 +53,10 @@ class ACNeuralAgent:
         self.critic.eval()
         self.target_critic.eval()
         self.gamma = 0.99
+        self.std = 0.01
         self.replay_buffer = ReplayBuffer()
         self.critic_criterion = nn.MSELoss()
-        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1e-3)
+        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=1e-4)
         self.critic_optimizer = torch.optim.AdamW(self.critic.parameters(), lr=1e-3)
 
     def select_action(self, state):
@@ -64,6 +65,8 @@ class ACNeuralAgent:
         with torch.no_grad():
             action = self.actor(state)
             action = action.view(-1)
+            if self.std > 0:
+                action += torch.randn_like(action) * self.std
             action = action.cpu().numpy()
         return action
 
@@ -154,9 +157,12 @@ class ACNeuralAgent:
                 steps += 1
                 state = next_state
             if episode % num_episodes == 0 and server.is_connected():
-                server.send_clear()
+                server.send_paused()
             best_reward = max(best_reward, episode_reward)
-            loading_bar.set_postfix({"Avg Reward": episode_reward, "Best Reward": best_reward, "Actor Loss": policy_loss, "Critic Loss": critic_loss})
+            info = {"Reward": episode_reward, "Best Reward": best_reward, "Actor Loss": policy_loss, "Critic Loss": critic_loss}
+            loading_bar.set_postfix(info)
+            info["Episode"] = episode
+            server.send_info(info)
 
 def main(env_name: str): 
     args = get_env_args(env_name)
